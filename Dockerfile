@@ -1,59 +1,53 @@
-# 第一阶段：构建依赖
+# 第一阶段：构建依赖 (使用更小的基础镜像)
 FROM python:3.9-alpine AS builder
 
-# 设置工作目录
 WORKDIR /app
 
-# 切换Alpine镜像源为国内源
+# 一次性完成所有系统配置和依赖安装
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories \
-    && apk add --no-cache gcc musl-dev libffi-dev
+    && apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev
 
-# 配置pip使用国内镜像源
-RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# 配置pip并使用单次命令完成所有包安装
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    && pip install --no-cache-dir wheel
 
-# 复制依赖文件，安装到轮子目录
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements.txt \
-    && pip wheel --no-cache-dir --wheel-dir /app/wheels gunicorn
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt && \
+    apk del .build-deps  # 删除编译依赖
 
-# 第二阶段：运行环境
+# 第二阶段：运行环境 (使用相同基础镜像)
 FROM python:3.9-alpine
 
-# 设置工作目录和环境变量
 WORKDIR /app
+
+# 一次性设置环境变量、时区和依赖
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai
 
-# 切换Alpine镜像源并安装运行时依赖
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories \
-    && apk add --no-cache nginx supervisor libffi tzdata \
-    && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
-    && echo "Asia/Shanghai" > /etc/timezone \
-    && mkdir -p /run/nginx /app/app/data /app/app/backups /app/app/uploads /app/app/static /data
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories && \
+    apk add --no-cache libffi tzdata nginx supervisor && \
+    cp /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
+    mkdir -p /run/nginx /app/app/{data,backups,uploads,static} /data && \
+    rm -rf /var/cache/apk/*
 
-# 从构建阶段复制wheel并安装
-COPY --from=builder /app/wheels /wheels
-RUN pip install --no-cache-dir /wheels/*
+# 复制并安装wheel后立即删除
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 
-# 配置Nginx
+# 集中复制配置文件
 COPY docker/nginx.conf /defaults/nginx.conf
-
-# 配置Supervisor
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# 添加启动脚本并设置执行权限
+# 合并权限设置
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/cleanup_backups.sh /app/docker/cleanup_backups.sh
 RUN chmod +x /entrypoint.sh /app/docker/cleanup_backups.sh
 
-# 复制应用代码（放在最后以利用缓存）
+# 最后复制应用代码
 COPY . .
 
-# 设置持久化卷
-VOLUME ["/data", "/app/app/backups", "/app/app/uploads", "/app/app/static", "/etc/nginx/http.d"]
-
-# 暴露端口
+VOLUME ["/data", "/app/app/backups", "/app/app/uploads", "/app/app/static"]
 EXPOSE 80
-
-# 使用启动脚本作为容器入口点
-ENTRYPOINT ["/entrypoint.sh"] 
+ENTRYPOINT ["/entrypoint.sh"]
