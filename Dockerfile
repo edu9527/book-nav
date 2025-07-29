@@ -48,6 +48,6 @@ RUN chmod +x /entrypoint.sh /app/docker/cleanup_backups.sh
 # 最后复制应用代码
 COPY . .
 
-VOLUME ["/data", "/app/app/backups", "/app/app/uploads", "/app/app/static"]
+VOLUME ["/data", "/app/app/backups", "/app/app/uploads", "/app/app/static", "/etc/nginx/http.d"]
 EXPOSE 80
 ENTRYPOINT ["/entrypoint.sh"]
